@@ -1,5 +1,5 @@
 
-# BendingBad — Angular + Python Beam Response Explorer
+# BendingBad 
 
 BendingBad is an interactive beam analysis and structural mechanics application developed for the Mechanics of Solids course. It provides a practical beam-analysis workflow covering beam and material properties, support conditions, point/distributed/couple loads, presets, numerical response diagrams and CSV export, with the beam visualiser as the main workspace.
 
