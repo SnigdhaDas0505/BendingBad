@@ -1,0 +1,53 @@
+@if (analysis && heatmapSamples.length > 0) {
+  <section class="beam-heatmap-card" aria-labelledby="beam-heatmap-title">
+    <div class="beam-heatmap-heading">
+      <div>
+        <h2 id="beam-heatmap-title">Stress along span</h2>
+      </div>
+      <div class="beam-heatmap-minimum">
+        <span>Lowest safety factor</span>
+        <strong>{{ minimumFactorLabel }}</strong>
+      </div>
+    </div>
+
+    <div class="beam-heatmap-interactive">
+      <svg class="beam-heatmap-svg" viewBox="0 0 900 94" role="slider" tabindex="0"
+           [attr.aria-label]="'Bending stress along the beam. Selected position ' + (selectedX | number:'1.2-2') + ' metres.'"
+           aria-orientation="horizontal"
+           [attr.aria-valuemin]="0" [attr.aria-valuemax]="analysis.beam.length_m"
+           [attr.aria-valuenow]="selectedX"
+           [attr.aria-valuetext]="(selectedX | number:'1.2-2') + ' metres'"
+           (pointermove)="onHeatmapPointerMove($event)"
+           (click)="onHeatmapPointerMove($event)"
+           (keydown)="onHeatmapKeydown($event)">
+        <defs>
+          <linearGradient id="beamStressGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+            @for (sample of heatmapSamples; track sample.x_ratio) {
+              <stop [attr.offset]="sample.x_ratio * 100 + '%'" [attr.stop-color]="sample.color"></stop>
+            }
+          </linearGradient>
+        </defs>
+        <text x="60" y="15" class="beam-heatmap-axis-label">0 m</text>
+        <text x="840" y="15" text-anchor="end" class="beam-heatmap-axis-label">{{ analysis.beam.length_m | number:'1.1-1' }} m</text>
+        <rect x="60" y="24" width="780" height="28" rx="6" fill="url(#beamStressGradient)" class="beam-heatmap-strip"></rect>
+        <line [attr.x1]="60 + selectedX / analysis.beam.length_m * 780" y1="19"
+              [attr.x2]="60 + selectedX / analysis.beam.length_m * 780" y2="57" class="beam-heatmap-cursor"></line>
+      </svg>
+      @if (selectedSample; as sample) {
+        <div class="beam-heatmap-tooltip" [style.left.%]="tooltipPositionPercent" aria-live="polite">
+          <strong>x = {{ sample.point.x_m | number:'1.2-2' }} m</strong>
+          <span>{{ sample.stressMpa | number:'1.1-1' }} MPa</span>
+          <span>FoS {{ !hasValidStrengthLimit ? '—' : sample.factorOfSafety === null ? '∞' : (sample.factorOfSafety | number:'1.2-2') }}</span>
+        </div>
+      }
+    </div>
+
+    @if (hasValidStrengthLimit) {
+      <div class="beam-heatmap-legend" aria-label="Factor of safety color scale">
+        <span><i class="legend-critical"></i> Below strength</span>
+        <span><i class="legend-warning"></i> Near strength</span>
+        <span><i class="legend-safe"></i> More margin</span>
+      </div>
+    }
+  </section>
+}

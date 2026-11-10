@@ -1,0 +1,204 @@
+<section class="twin-workspace">
+  <div class="twin-heading">
+    <div>
+      <h1>Live monitor</h1>
+    </div>
+    <div class="twin-status"
+         [class.status-live]="connectionState === 'live'"
+         [class.status-warning]="connectionState === 'reconnecting' || connectionState === 'error'">
+      <span class="status-dot"></span>
+      {{ connectionState === 'live' ? 'STREAMING · 10 Hz' : connectionState === 'connecting' ? 'CONNECTING' : connectionState === 'reconnecting' ? 'RECONNECTING' : connectionState === 'error' ? 'CONNECTION ERROR' : 'PAUSED' }}
+    </div>
+  </div>
+
+  @if (connectionError) {
+    <div class="error-banner" role="alert">{{ connectionError }}</div>
+  }
+  @if (historyError) {
+    <div class="twin-history-note" role="status">{{ historyError }}</div>
+  }
+
+  @if (currentFrame; as frame) {
+    <div class="twin-alert-banner" [class.alert-warning]="frame.alert.level === 'WARNING'" [class.alert-critical]="frame.alert.level === 'CRITICAL'" aria-live="polite">
+      <span class="alert-level">{{ frame.alert.level }}</span>
+      <span>{{ frame.alert.message }}</span>
+      <small>{{ frame.timestamp | date:'HH:mm:ss.SSS' }}</small>
+    </div>
+
+    <section class="twin-panel twin-trend-panel twin-trend-wide">
+        <div class="twin-panel-heading">
+          <div><div class="card-kicker">RECENT SAMPLES</div><h2>Safety factor</h2></div>
+          <button type="button" class="button button-quiet" (click)="exportHistory()" [disabled]="frames.length === 0">↓ Export CSV</button>
+        </div>
+        <div class="twin-chart">
+          <svg viewBox="0 0 720 240" role="img" aria-label="Recent factor of safety with warning and yield thresholds">
+            <line x1="44" y1="35" x2="696" y2="35" class="trend-grid"></line>
+            <line x1="44" y1="120" x2="696" y2="120" class="trend-grid"></line>
+            <line x1="44" y1="205" x2="696" y2="205" class="trend-grid"></line>
+            <line x1="44" [attr.y1]="safetyThresholdY" x2="696" [attr.y2]="safetyThresholdY" class="trend-warning-line"></line>
+            <line x1="44" y1="162.5" x2="696" y2="162.5" class="trend-critical-line"></line>
+            <path [attr.d]="safetyPath" class="trend-path"></path>
+            <text x="12" y="39" class="trend-axis-label">4</text>
+            <text x="12" y="124" class="trend-axis-label">2</text>
+            <text x="12" y="209" class="trend-axis-label">0</text>
+            <text x="698" [attr.y]="safetyThresholdY - 5" class="trend-warning-label">warning</text>
+            <text x="698" y="158" class="trend-critical-label">yield</text>
+            <text x="44" y="229" class="trend-axis-label">oldest</text>
+            <text x="696" y="229" text-anchor="end" class="trend-axis-label">now</text>
+          </svg>
+        </div>
+        <div class="trend-legend"><span><i></i>Safety factor (4+)</span><span><b></b>Warning level</span></div>
+    </section>
+
+    <div class="twin-hero-grid">
+      <section class="twin-panel failure-monitor-panel">
+        <div class="twin-panel-heading">
+          <div><div class="card-kicker">LIVE RESPONSE</div><h2>Failure preview</h2></div>
+          <button type="button" class="button button-quiet" [attr.aria-pressed]="soundEnabled" (click)="toggleSound()">
+            {{ soundEnabled ? 'Disable sound' : 'Enable sound' }}
+          </button>
+        </div>
+        <div class="failure-visualization-panel">
+          <app-failure-visualization
+            [mode]="liveFailureMode"
+            [stressRatio]="liveStressRatio"
+            [failureXRatio]="0.5"
+            [active]="connectionState === 'live' && liveStressRatio >= 0.75"
+            [compact]="true"
+            [showBeam]="true" />
+        </div>
+        @if (soundError) { <div class="error-banner" role="alert">{{ soundError }}</div> }
+      </section>
+
+      <section class="twin-highlights" aria-label="Live stress highlights">
+        <div class="twin-metrics-grid">
+          <article class="twin-metric-card fos-card" [class.metric-warning]="frame.alert.level === 'WARNING'" [class.metric-critical]="frame.alert.level === 'CRITICAL'">
+            <span class="summary-label">Safety factor</span>
+            @if (frame.material.factor_of_safety === null) {
+              <div class="twin-metric-value">∞ <small>unbounded</small></div>
+            } @else {
+              <div class="twin-metric-value">{{ frame.material.factor_of_safety | number:'1.2-2' }}</div>
+            }
+            <div class="summary-sub">{{ selectedMaterialName }} · {{ frame.material.yield_strength_mpa | number:'1.1-1' }} MPa</div>
+          </article>
+          <article class="twin-metric-card">
+            <span class="summary-label">Equivalent stress</span>
+            <div class="twin-metric-value">{{ frame.material.von_mises_mpa | number:'1.1-1' }} <small>MPa</small></div>
+          </article>
+          <article class="twin-metric-card">
+            <span class="summary-label">Principal stresses</span>
+            <div class="twin-metric-pair"><strong>σ₁ {{ frame.mohrs_circle.sigma_1_mpa | number:'1.1-1' }}</strong><strong>σ₂ {{ frame.mohrs_circle.sigma_2_mpa | number:'1.1-1' }} <small>MPa</small></strong></div>
+            <div class="summary-sub">τmax ±{{ frame.mohrs_circle.tau_max_mpa | number:'1.1-1' }} MPa</div>
+          </article>
+          <article class="twin-metric-card">
+            <span class="summary-label">Rosette strain</span>
+            <div class="twin-strain-values"><span>εₓ <strong>{{ frame.strain_input.ex_micro | number:'1.0-0' }}</strong></span><span>εᵧ <strong>{{ frame.strain_input.ey_micro | number:'1.0-0' }}</strong></span><span>γₓᵧ <strong>{{ frame.strain_input.gamma_xy_micro | number:'1.0-0' }}</strong></span></div>
+            <div class="summary-sub">με</div>
+          </article>
+        </div>
+        <div class="twin-threshold-row">
+          <span>Warning FoS <strong>{{ warningFactorOfSafety | number:'1.1-1' }}</strong></span>
+          <span>{{ strengthLabel }} <strong>{{ frame.material.yield_strength_mpa | number:'1.1-1' }} MPa</strong></span>
+        </div>
+      </section>
+    </div>
+
+    <div class="twin-main-grid">
+      <section class="twin-panel twin-circle-panel">
+        <div class="twin-panel-heading">
+          <div><div class="card-kicker">CURRENT SAMPLE</div><h2>Mohr's circle</h2></div>
+          <span class="live-pill" [class.paused-pill]="connectionState !== 'live'"><i></i>{{ connectionState === 'live' ? 'LIVE' : 'PAUSED' }}</span>
+        </div>
+        <svg viewBox="0 0 600 330" class="twin-circle-svg" role="img"
+             [attr.aria-label]="'Mohr circle with principal stresses ' + (frame.mohrs_circle.sigma_1_mpa | number:'1.1-1') + ' and ' + (frame.mohrs_circle.sigma_2_mpa | number:'1.1-1') + ' MPa'">
+          <line x1="35" y1="165" x2="565" y2="165" class="mohr-axis"></line>
+          <line x1="300" y1="25" x2="300" y2="305" class="mohr-axis"></line>
+          <text x="554" y="153" class="mohr-axis-label">σ MPa</text>
+          <text x="311" y="38" class="mohr-axis-label">τ MPa</text>
+          <circle [attr.cx]="circleX(frame.mohrs_circle.center_mpa)" cy="165"
+                  [attr.r]="frame.mohrs_circle.radius_mpa * circleScale" class="mohr-circle"></circle>
+          <line [attr.x1]="circleX(frame.stress_tensor.sigma_x_mpa)" [attr.y1]="circleY(frame.stress_tensor.tau_xy_mpa)"
+                [attr.x2]="circleX(frame.stress_tensor.sigma_y_mpa)" [attr.y2]="circleY(-frame.stress_tensor.tau_xy_mpa)" class="mohr-diameter"></line>
+          <circle [attr.cx]="circleX(frame.stress_tensor.sigma_x_mpa)" [attr.cy]="circleY(frame.stress_tensor.tau_xy_mpa)" r="5" class="mohr-point-a"></circle>
+          <circle [attr.cx]="circleX(frame.stress_tensor.sigma_y_mpa)" [attr.cy]="circleY(-frame.stress_tensor.tau_xy_mpa)" r="5" class="mohr-point-b"></circle>
+          <circle [attr.cx]="circleX(frame.mohrs_circle.center_mpa)" cy="165" r="3.5" class="mohr-center-point"></circle>
+          <text [attr.x]="circleX(frame.stress_tensor.sigma_x_mpa) + 8" [attr.y]="circleY(frame.stress_tensor.tau_xy_mpa) - 8" class="mohr-point-label">A</text>
+          <text [attr.x]="circleX(frame.stress_tensor.sigma_y_mpa) + 8" [attr.y]="circleY(-frame.stress_tensor.tau_xy_mpa) + 16" class="mohr-point-label">B</text>
+          <text [attr.x]="circleX(frame.mohrs_circle.sigma_1_mpa)" y="188" text-anchor="middle" class="mohr-principal-label">σ₁</text>
+          <text [attr.x]="circleX(frame.mohrs_circle.sigma_2_mpa)" y="188" text-anchor="middle" class="mohr-principal-label">σ₂</text>
+        </svg>
+        <div class="twin-circle-caption">σₓ {{ frame.stress_tensor.sigma_x_mpa | number:'1.1-1' }} · σᵧ {{ frame.stress_tensor.sigma_y_mpa | number:'1.1-1' }} · τₓᵧ {{ frame.stress_tensor.tau_xy_mpa | number:'1.1-1' }} MPa</div>
+      </section>
+    </div>
+  } @else {
+    <section class="twin-panel twin-empty">
+      <div class="card-kicker">TELEMETRY</div>
+      <h2>{{ connectionState === 'connecting' ? 'Connecting…' : 'Waiting for readings.' }}</h2>
+      @if (connectionState !== 'connecting') {
+        <button type="button" class="button button-primary" (click)="connect()" [disabled]="!hasValidSettings">Start stream</button>
+      }
+    </section>
+  }
+
+  <div class="twin-lower-grid">
+    <section class="twin-panel twin-settings-panel">
+      <div class="twin-panel-heading">
+        <div><div class="card-kicker">SETTINGS</div><h2>Material &amp; thresholds</h2></div>
+      </div>
+      <div class="twin-settings-grid">
+        <div class="field-block twin-material-preset-field">
+          <label for="twinMaterialPreset">Material preset</label>
+          <select id="twinMaterialPreset" [ngModel]="selectedMaterialId" (ngModelChange)="onMaterialPresetChange($event)">
+            @for (material of materialPresets; track material.id) {
+              <option [value]="material.id">{{ material.name }} · E {{ material.youngs_modulus_gpa }} GPa · {{ material.strength_kind === 'bending-reference' ? 'bending ref' : 'yield' }} {{ material.yield_strength_mpa }} MPa</option>
+            }
+            <option value="custom">Custom material</option>
+          </select>
+          @if (selectedMaterial; as material) {
+            <small class="field-help">{{ material.description }} <a [href]="material.source_url" target="_blank" rel="noopener noreferrer">{{ material.source_name }}</a></small>
+            <small class="field-help material-strength-note">{{ material.strength_basis }}</small>
+          } @else {
+            <small class="field-help">Enter material properties to screen.</small>
+          }
+          @if (materialCatalogError) {
+            <small class="material-catalog-error" role="status">{{ materialCatalogError }}</small>
+          }
+        </div>
+        <div class="field-block"><label for="twinE">Young's modulus · E</label><div class="input-with-unit"><input id="twinE" type="number" min="0.001" max="2000" step="1" [(ngModel)]="youngsModulusGpa" (ngModelChange)="onCustomMaterialChange()"><span>GPa</span></div></div>
+        <div class="field-block"><label for="twinNu">Poisson ratio · ν</label><div class="input-with-unit"><input id="twinNu" type="number" min="-0.999" max="0.499" step="0.01" [(ngModel)]="poissonRatio" (ngModelChange)="onCustomMaterialChange()"><span>ν</span></div></div>
+        <div class="field-block"><label for="twinYield">{{ strengthLabel }}</label><div class="input-with-unit"><input id="twinYield" type="number" min="0.001" max="10000" step="1" [(ngModel)]="yieldStrengthMpa" (ngModelChange)="onCustomStrengthChange()"><span>MPa</span></div></div>
+        <div class="field-block"><label for="twinWarning">Warning below safety factor</label><div class="input-with-unit"><input id="twinWarning" type="number" min="1.001" max="10" step="0.1" [(ngModel)]="warningFactorOfSafety" (ngModelChange)="recalculateFrames()"><span>level</span></div></div>
+        <div class="twin-load-control">
+          <div class="angle-heading"><label for="loadScale">Load level</label><strong>{{ loadScale | number:'1.1-1' }}×</strong></div>
+          <input id="loadScale" type="range" min="0" max="3" step="0.1" [(ngModel)]="loadScale" (change)="connect()">
+          <div class="summary-sub">Changes the strain level.</div>
+        </div>
+      </div>
+      <div class="twin-controls">
+        <button type="button" class="button button-primary" (click)="connect()" [disabled]="!hasValidSettings">Restart updates</button>
+        <button type="button" class="button button-quiet" (click)="pause()" [disabled]="connectionState === 'disconnected'">Pause</button>
+      </div>
+    </section>
+
+    <section class="twin-panel twin-alerts-panel">
+      <div class="twin-panel-heading">
+        <div><div class="card-kicker">EVENT LOG</div><h2>Recent threshold crossings</h2></div>
+      </div>
+      @if (recentAlerts.length > 0) {
+        <div class="twin-event-list">
+          @for (event of recentAlerts; track event.timestamp) {
+            <article class="twin-event" [class.event-warning]="event.level === 'WARNING'" [class.event-critical]="event.level === 'CRITICAL'">
+              <span>{{ event.level }}</span><div>{{ event.message }}<small>{{ event.timestamp | date:'mediumTime' }}</small></div>
+            </article>
+          }
+        </div>
+      } @else {
+        <div class="twin-no-events">No warning or critical threshold crossings in this session.</div>
+      }
+    </section>
+  </div>
+
+  <div class="twin-safety-note">
+    Simulated readings · Not for safety decisions.
+  </div>
+</section>

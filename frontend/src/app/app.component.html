@@ -1,0 +1,775 @@
+<div class="app-shell">
+  <header class="topbar">
+    <a class="brand" href="#top" aria-label="Bending Bad home">
+      <span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></span>
+      <span class="brand-name">Bending <span>Bad</span></span>
+    </a>
+
+    <nav class="workspace-nav" aria-label="Analysis tools">
+      <button type="button" [class.active]="activeWorkspace === 'beam'" [attr.aria-current]="activeWorkspace === 'beam' ? 'page' : null" (click)="activeWorkspace = 'beam'">Beam analysis</button>
+      <button type="button" [class.active]="activeWorkspace === 'mohr'" [attr.aria-current]="activeWorkspace === 'mohr' ? 'page' : null" (click)="activeWorkspace = 'mohr'">Mohr's circle</button>
+      <button type="button" [class.active]="activeWorkspace === 'twin'" [attr.aria-current]="activeWorkspace === 'twin' ? 'page' : null" (click)="activeWorkspace = 'twin'">Live monitor</button>
+    </nav>
+
+    @if (activeWorkspace === 'beam') {
+      <div class="topbar-right">
+        <div class="api-status" [class.is-busy]="loading" [class.has-error]="!!errorMessage">
+          <span class="status-dot"></span>
+          {{ loading ? 'Calculating' : errorMessage ? 'API unavailable' : 'Live analysis' }}
+        </div>
+        <button class="button button-quiet" type="button" (click)="exportCsv()" [disabled]="!result">
+          <span class="button-icon">↓</span> Export data
+        </button>
+        <button class="button button-quiet" type="button" (click)="reset()">Reset case</button>
+      </div>
+    }
+  </header>
+
+  <main id="top" class="page-content">
+    @if (activeWorkspace === 'beam') {
+    <div class="beam-workspace">
+    <section class="hero-section">
+      <div class="section-heading hero-heading">
+        <div>
+          <h1>Beam analysis</h1>
+        </div>
+        <div class="preset-control">
+          <label for="classicPresetChoice">Beam cases</label>
+          <select id="classicPresetChoice" [(ngModel)]="classicPresetChoice" (ngModelChange)="applyPreset($event)">
+            <option value="">Custom beam</option>
+            <option value="centre">Simply supported · centre load</option>
+            <option value="udl">Simply supported · full UDL</option>
+            <option value="cantilever">Cantilever · tip load</option>
+            <option value="fixed">Fixed–fixed · UDL</option>
+            <option value="overhang">Overhang · tip load</option>
+            <option value="two-point">Simply supported · two loads</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="preset-gallery" role="group" aria-label="Object bend tests">
+        @for (preset of realWorldPresets; track preset.id) {
+          <button type="button" class="preset-tile"
+                  [class.selected]="activeObjectPresetId === preset.id"
+                  [attr.aria-pressed]="activeObjectPresetId === preset.id"
+                  [attr.data-skin]="preset.objectSkin"
+                  [attr.title]="preset.materialName + ' · illustrative test case'"
+                  (click)="applyPreset(preset.id)">
+            <span class="preset-tile-icon" aria-hidden="true">{{ preset.icon }}</span>
+            <span>{{ preset.name }}</span>
+          </button>
+        }
+        @if (activeObjectPresetId) {
+          <span class="illustrative-tag">Illustrative</span>
+        }
+      </div>
+
+      @if (result; as r) {
+        <section class="metric-bar" aria-label="Beam analysis summary">
+          <div class="metric-item">
+            <span>Max moment</span>
+            <strong>{{ formatValue(r.summary.max_abs_moment_kNm) }} <small>kN·m</small></strong>
+            <small>x {{ r.summary.max_moment_at_m | number:'1.2-2' }} m</small>
+          </div>
+          <div class="metric-item">
+            <span>Max deflection</span>
+            <strong>{{ formatValue(r.summary.max_abs_deflection_mm) }} <small>mm</small></strong>
+            <small>x {{ r.summary.max_deflection_at_m | number:'1.2-2' }} m</small>
+          </div>
+          <div class="metric-item">
+            <span>Max stress</span>
+            <strong>{{ formatValue(r.summary.max_abs_bending_stress_MPa) }} <small>MPa</small></strong>
+            <small>x {{ r.summary.max_stress_at_m | number:'1.2-2' }} m</small>
+          </div>
+          <div class="metric-item" [attr.data-state]="beamSafetyState">
+            <span>Factor of safety</span>
+            <strong>{{ beamSafetyFactor === null ? '∞' : (beamSafetyFactor | number:'1.2-2') }}</strong>
+            <div class="fos-meter" role="meter" aria-label="Yield utilization"
+                 [attr.aria-valuenow]="yieldUtilizationPercent" aria-valuemin="0" aria-valuemax="100">
+              <span [style.width.%]="yieldUtilizationPercent"></span>
+            </div>
+          </div>
+        </section>
+      }
+
+      @if (errorMessage) {
+        <div class="error-banner" role="alert">
+          <strong>Analysis could not be completed.</strong> {{ errorMessage }}
+        </div>
+      }
+      @if (smallDeflectionLimitExceeded) {
+        <div class="model-warning" role="status">
+          <span aria-hidden="true">⚠</span>
+          Linear beam model out of range · deflection exceeds 35% of span.
+        </div>
+      }
+
+      <div class="hero-grid">
+        <section class="visualizer-card" aria-label="Interactive beam visualizer">
+          <div class="card-topline">
+            <div>
+              <h2>{{ objectSkin === 'beam' ? 'Beam and deflection' : activeObjectPresetName }}</h2>
+            </div>
+            @if (objectSkin === 'beam') {
+              <div class="visual-legend">
+                <span><i class="legend-swatch beam-swatch"></i> Undeformed</span>
+                <span><i class="legend-swatch curve-swatch"></i> Deflected shape</span>
+                <span><i class="legend-swatch load-swatch"></i> Applied load</span>
+              </div>
+            }
+          </div>
+
+          <div class="beam-canvas-wrap">
+            <svg class="beam-canvas" viewBox="0 0 1000 310" role="slider" tabindex="0"
+               [attr.aria-label]="'Beam section selector. Position ' + (activeX | number:'1.2-2') + ' metres. Use left and right arrow keys to inspect sections; Home and End move to the supports.'"
+               [attr.aria-valuemin]="0" [attr.aria-valuemax]="beam.length_m"
+               [attr.aria-valuenow]="activeX" [attr.aria-valuetext]="(activeX | number:'1.2-2') + ' metres'"
+               aria-keyshortcuts="ArrowLeft ArrowRight Home End"
+                 [class.object-case]="objectSkin !== 'beam'"
+               (pointermove)="onBeamPointerMove($event)"
+               (pointerdown)="onBeamPointerDown($event)"
+               (keydown)="onBeamKeydown($event)">
+              <defs>
+                <marker id="loadArrow" markerWidth="8" markerHeight="8" refX="4" refY="4" orient="auto">
+                  <path d="M 0 0 L 8 4 L 0 8 z" fill="#64748b"></path>
+                </marker>
+                <marker id="reactionArrow" markerWidth="8" markerHeight="8" refX="4" refY="4" orient="auto">
+                  <path d="M 0 8 L 4 0 L 8 8 z" fill="#64748b"></path>
+                </marker>
+              </defs>
+
+              <g class="beam-grid-lines">
+                @for (tick of [0, 0.25, 0.5, 0.75, 1]; track tick) {
+                  <line [attr.x1]="70 + tick * 860" y1="35" [attr.x2]="70 + tick * 860" y2="268"></line>
+                  <text [attr.x]="70 + tick * 860" y="292" text-anchor="middle">{{ (tick * beam.length_m) | number:'1.1-1' }} m</text>
+                }
+              </g>
+
+              @if (supportIsFixedAtLeft()) {
+                <rect x="54" y="116" width="16" height="84" class="fixed-wall"></rect>
+                @for (hatch of [0,1,2,3,4,5,6]; track hatch) {
+                  <line x1="44" [attr.y1]="120 + hatch * 12" x2="54" [attr.y2]="130 + hatch * 12" class="support-hatch"></line>
+                }
+              }
+              @if (supportIsFixedAtRight()) {
+                <rect x="930" y="116" width="16" height="84" class="fixed-wall"></rect>
+                @for (hatch of [0,1,2,3,4,5,6]; track hatch) {
+                  <line x1="946" [attr.y1]="120 + hatch * 12" x2="956" [attr.y2]="130 + hatch * 12" class="support-hatch"></line>
+                }
+              }
+              @if (supportIsPinRoller()) {
+                <g class="support-shape">
+                  <path [attr.d]="'M ' + (70 + beam.support_a_m / beam.length_m * 860) + ' 164 l -14 24 h 28 z'"></path>
+                  <line [attr.x1]="70 + beam.support_a_m / beam.length_m * 860 - 20" y1="190" [attr.x2]="70 + beam.support_a_m / beam.length_m * 860 + 20" y2="190"></line>
+                  <path [attr.d]="'M ' + (70 + beam.support_b_m / beam.length_m * 860) + ' 164 l -14 20 h 28 z'"></path>
+                  <circle [attr.cx]="70 + beam.support_b_m / beam.length_m * 860 - 6" cy="188" r="4"></circle>
+                  <circle [attr.cx]="70 + beam.support_b_m / beam.length_m * 860 + 6" cy="188" r="4"></circle>
+                  <line [attr.x1]="70 + beam.support_b_m / beam.length_m * 860 - 20" y1="195" [attr.x2]="70 + beam.support_b_m / beam.length_m * 860 + 20" y2="195"></line>
+                </g>
+              }
+              @if (beam.support_type === 'propped-cantilever') {
+                <g class="support-shape">
+                  <path d="M 930 164 l -14 24 h 28 z"></path>
+                  <circle cx="924" cy="192" r="4"></circle><circle cx="936" cy="192" r="4"></circle>
+                  <line x1="910" y1="199" x2="950" y2="199"></line>
+                </g>
+              }
+
+              <path [attr.d]="beamBaselinePath" class="undeformed-beam"></path>
+              <path [attr.d]="beamDeflectionPath" class="deflected-beam"></path>
+
+              @for (load of loads; track load.id) {
+                @if (load.type === 'point') {
+                  <g class="point-load-symbol">
+                    <line [attr.x1]="70 + load.x / beam.length_m * 860"
+                          [attr.y1]="load.P >= 0 ? 67 : 239"
+                          [attr.x2]="70 + load.x / beam.length_m * 860"
+                          [attr.y2]="load.P >= 0 ? 143 : 174"
+                          marker-end="url(#loadArrow)"></line>
+                    <text [attr.x]="70 + load.x / beam.length_m * 860" [attr.y]="load.P >= 0 ? 56 : 254" text-anchor="middle">{{ displayForceLoad(load.P) }}</text>
+                  </g>
+                }
+                @if (load.type === 'udl') {
+                  <g class="distributed-load-symbol">
+                    <rect [attr.x]="70 + load.x1 / beam.length_m * 860"
+                          [attr.y]="load.w1 + load.w2 >= 0 ? 82 : 166"
+                          [attr.width]="(load.x2 - load.x1) / beam.length_m * 860" height="52" rx="3"></rect>
+                    <line [attr.x1]="70 + load.x1 / beam.length_m * 860"
+                          [attr.y1]="load.w1 >= 0 ? 82 : 228"
+                          [attr.x2]="70 + load.x1 / beam.length_m * 860"
+                          [attr.y2]="load.w1 >= 0 ? 144 : 166" marker-end="url(#loadArrow)"></line>
+                    <line [attr.x1]="70 + load.x2 / beam.length_m * 860"
+                          [attr.y1]="load.w2 >= 0 ? 82 : 228"
+                          [attr.x2]="70 + load.x2 / beam.length_m * 860"
+                          [attr.y2]="load.w2 >= 0 ? 144 : 166" marker-end="url(#loadArrow)"></line>
+                    <text [attr.x]="70 + (load.x1 + load.x2) / (2 * beam.length_m) * 860"
+                          [attr.y]="load.w1 + load.w2 >= 0 ? 72 : 248" text-anchor="middle">
+                      {{ displayDistributedLoad(load.w1) }} → {{ displayDistributedLoad(load.w2) }}
+                    </text>
+                  </g>
+                }
+                @if (load.type === 'moment') {
+                  <g class="moment-load-symbol">
+                    <path [attr.d]="'M ' + (70 + load.x / beam.length_m * 860 - 17) + ' 126 A 18 18 0 1 1 ' + (70 + load.x / beam.length_m * 860 + 11) + ' 112'"></path>
+                    <text [attr.x]="70 + load.x / beam.length_m * 860" y="88" text-anchor="middle">{{ displayMomentLoad(load.M) }}</text>
+                  </g>
+                }
+              }
+
+              @if (result) {
+                <line [attr.x1]="activeSvgX" y1="25" [attr.x2]="activeSvgX" y2="260" class="inspection-line"></line>
+                <circle [attr.cx]="activeSvgX" [attr.cy]="activeMarkerY" r="6" class="inspection-dot"></circle>
+                <g class="inspection-label" [attr.transform]="'translate(' + activeSvgX + ', 18)'">
+                  <rect x="-39" y="-15" width="78" height="22" rx="6"></rect>
+                  <text text-anchor="middle" y="0">x = {{ activeX | number:'1.2-2' }} m</text>
+                </g>
+              }
+            </svg>
+            @if (objectSkin === 'beam') {
+              <app-failure-visualization
+                [mode]="failureMode"
+                [objectSkin]="objectSkin"
+                [stressRatio]="failureStressRatio"
+                [failureXRatio]="failureLocationRatio"
+                [deflectionProfile]="deflectionProfile"
+                [active]="failureStressRatio >= 0.75"
+                [showBeam]="false" />
+            } @else {
+              @defer (on immediate) {
+                <app-object-3d-visualization
+                  [skin]="objectSkin"
+                  [mode]="failureMode"
+                  [stressRatio]="failureStressRatio"
+                  [failureXRatio]="failureLocationRatio"
+                  [deflectionProfile]="deflectionProfile"
+                  [spanLengthM]="beam.length_m"
+                  [deformationScale]="objectSkin === 'wing' ? 12 : 1"
+                  [active]="failureStressRatio >= 0.75" />
+              } @placeholder {
+                <div class="object-3d-loading" aria-label="Loading 3D preview"></div>
+              }
+            }
+          </div>
+
+          <div class="visualizer-footer">
+            <div class="visualizer-actions">
+              @if (failurePreviewAvailable) {
+                <span class="yield-summary" [class.yield-summary-alert]="isYieldLimitExceeded">
+                  <strong>Peak {{ failureEstimate?.stressMpa | number:'1.1-1' }} / {{ yieldStrengthMpa | number:'1.1-1' }} MPa</strong>
+                  <small>{{ isYieldLimitExceeded ? 'Limit exceeded' : strengthLimitLabel }}</small>
+                </span>
+              }
+              @if (canPushPresetToFailure) {
+                <button class="button button-quiet failure-play-button" type="button"
+                        title="Raise this illustrative case's loads to 5% above the calculated first-yield level."
+                        (click)="pushPresetToFailure()">
+                  Push to failure
+                </button>
+              }
+            </div>
+          </div>
+        </section>
+
+        <aside class="inspector-card" aria-live="polite">
+          <div class="inspector-head">
+            <div>
+              <h2>Section response</h2>
+            </div>
+          </div>
+          @if (inspectedPoint; as p) {
+            <div class="inspector-position">
+              <div class="position-readout">
+                <span>Position</span>
+                <strong>{{ p.x_m | number:'1.2-2' }} <small>m</small></strong>
+              </div>
+            </div>
+
+            <div class="inspector-group">
+              <div class="group-heading">Response</div>
+              <div class="inspector-row"><span>Shear force, V(x+)</span><strong>{{ p.shear_kN | number:'1.3-3' }} <small>kN</small></strong></div>
+              <div class="inspector-row"><span>Bending moment, M(x)</span><strong>{{ p.moment_kNm | number:'1.3-3' }} <small>kN·m</small></strong></div>
+              <div class="inspector-row"><span>Slope, θ(x)</span><strong>{{ formatValue(p.slope_mrad) }} <small>mrad</small></strong></div>
+              <div class="inspector-row"><span>Deflection, v(x)</span><strong>{{ formatValue(p.deflection_mm) }} <small>mm</small></strong></div>
+            </div>
+
+            @if (result; as r) {
+              <div class="inspector-group">
+                <div class="group-heading">Support reactions</div>
+                <div class="inspector-row"><span>Vertical, A / B</span><strong>{{ r.reactions.RA_kN | number:'1.2-2' }} / {{ r.reactions.RB_kN | number:'1.2-2' }} <small>kN</small></strong></div>
+                @if (r.reactions.MA_kNm !== 0 || r.reactions.MB_kNm !== 0) {
+                  <div class="inspector-row"><span>Moment, A / B</span><strong>{{ r.reactions.MA_kNm | number:'1.2-2' }} / {{ r.reactions.MB_kNm | number:'1.2-2' }} <small>kN·m</small></strong></div>
+                }
+              </div>
+            }
+
+            <div class="inspector-group stress-group">
+              <div class="group-heading">Flexural stress</div>
+              <div class="stress-value-row">
+                <div class="stress-value top-fibre">
+                  <span>Top fibre</span>
+                  <strong>{{ formatValue(p.stress_top_MPa) }}</strong>
+                  <small>MPa</small>
+                </div>
+                <div class="stress-value bottom-fibre">
+                  <span>Bottom fibre</span>
+                  <strong>{{ formatValue(p.stress_bottom_MPa) }}</strong>
+                  <small>MPa</small>
+                </div>
+              </div>
+              <div class="inspector-row strain-row"><span>Top strain</span><strong>{{ formatValue(p.strain_top_micro) }} <small>με</small></strong></div>
+              <div class="inspector-row strain-row"><span>Bottom strain</span><strong>{{ formatValue(p.strain_bottom_micro) }} <small>με</small></strong></div>
+            </div>
+          } @else {
+            <div class="inspector-empty">Run an analysis to inspect section results.</div>
+          }
+        </aside>
+      </div>
+
+      @if (result && beamAnalysisContext) {
+        <app-beam-profile
+          [analysis]="beamAnalysisContext"
+          [selectedX]="activeX"
+          (selectedXChange)="selectProfilePosition($event)" />
+      }
+
+      @if (result; as r) {
+        @if (handCheck; as check) {
+          <details class="hand-check-card">
+            <summary id="hand-check-title">Solver cross-check <span>Closed-form midspan load case</span></summary>
+            <div class="hand-check-heading">
+              <div>
+                <div class="card-kicker">CLOSED-FORM CROSS-CHECK</div>
+                <h2>Solver vs. hand calculation</h2>
+              </div>
+              <span class="hand-check-badge">CHECK APPLIES</span>
+            </div>
+            <div class="hand-check-grid">
+              @for (metric of check.metrics; track metric.label) {
+                <article class="hand-check-metric">
+                  <strong class="hand-check-metric-title">{{ metric.label }}</strong>
+                  <div class="hand-check-values">
+                    <span>Solver <b>{{ metric.solverValue | number:'1.2-2' }} {{ metric.unit }}</b></span>
+                    <span>Hand calc <b>{{ metric.referenceValue | number:'1.2-2' }} {{ metric.unit }}</b></span>
+                  </div>
+                  <div class="hand-check-bars" aria-hidden="true">
+                    <div class="hand-check-track"><i class="solver-bar" [style.width.%]="metric.solverBarPercent"></i></div>
+                    <div class="hand-check-track"><i class="reference-bar" [style.width.%]="metric.referenceBarPercent"></i></div>
+                  </div>
+                  <small>
+                    @if (metric.differencePercent === null) {
+                      Relative difference unavailable at zero reference
+                    } @else {
+                      Difference {{ metric.differencePercent | number:'1.2-2' }}%
+                    }
+                  </small>
+                </article>
+              }
+            </div>
+          </details>
+        }
+      }
+
+      <div class="diagram-section">
+        <div class="diagram-heading">
+          <div>
+            <h2>Beam response</h2>
+          </div>
+        </div>
+        <div class="plot-grid">
+          <article class="plot-card">
+            <div class="plot-title"><span class="plot-dot shear-dot"></span><div><strong>Shear force</strong><small>V(x) · kN</small></div></div>
+            <svg viewBox="0 0 500 140" class="mini-plot" role="img" aria-label="Shear force diagram">
+              <line x1="24" [attr.y1]="plots.shear.zeroY" x2="476" [attr.y2]="plots.shear.zeroY" class="plot-zero"></line>
+              <path [attr.d]="plots.shear.path" class="plot-path shear-path"></path>
+              <line [attr.x1]="activePlotX" y1="8" [attr.x2]="activePlotX" y2="132" class="plot-cursor"></line>
+            </svg>
+          </article>
+          <article class="plot-card">
+            <div class="plot-title"><span class="plot-dot moment-dot"></span><div><strong>Bending moment</strong><small>M(x) · kN·m</small></div></div>
+            <svg viewBox="0 0 500 140" class="mini-plot" role="img" aria-label="Bending moment diagram">
+              <line x1="24" [attr.y1]="plots.moment.zeroY" x2="476" [attr.y2]="plots.moment.zeroY" class="plot-zero"></line>
+              <path [attr.d]="plots.moment.path" class="plot-path moment-path"></path>
+              <line [attr.x1]="activePlotX" y1="8" [attr.x2]="activePlotX" y2="132" class="plot-cursor"></line>
+            </svg>
+          </article>
+          <article class="plot-card">
+            <div class="plot-title"><span class="plot-dot stress-dot"></span><div><strong>Top-fibre stress</strong><small>σₓ(x) · MPa</small></div></div>
+            <svg viewBox="0 0 500 140" class="mini-plot" role="img" aria-label="Top fibre bending stress diagram">
+              <line x1="24" [attr.y1]="plots.stress.zeroY" x2="476" [attr.y2]="plots.stress.zeroY" class="plot-zero"></line>
+              <path [attr.d]="plots.stress.path" class="plot-path stress-path"></path>
+              <line [attr.x1]="activePlotX" y1="8" [attr.x2]="activePlotX" y2="132" class="plot-cursor"></line>
+            </svg>
+          </article>
+          <article class="plot-card">
+            <div class="plot-title"><span class="plot-dot deflection-dot"></span><div><strong>Deflection</strong><small>v(x) · mm</small></div></div>
+            <svg viewBox="0 0 500 140" class="mini-plot" role="img" aria-label="Beam deflection diagram">
+              <line x1="24" [attr.y1]="plots.deflection.zeroY" x2="476" [attr.y2]="plots.deflection.zeroY" class="plot-zero"></line>
+              <path [attr.d]="plots.deflection.path" class="plot-path deflection-path"></path>
+              <line [attr.x1]="activePlotX" y1="8" [attr.x2]="activePlotX" y2="132" class="plot-cursor"></line>
+            </svg>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="configuration-section">
+      <div class="sidebar-heading">
+        <h2>Model inputs</h2>
+        @if (result) { <span>{{ result.station_count | number }} stations</span> }
+      </div>
+      <nav class="input-tabs" role="tablist" aria-label="Beam inputs">
+        <button type="button" role="tab" id="input-tab-material" aria-controls="input-panel-material"
+                [attr.aria-selected]="activeInputPanel === 'material'" [class.active]="activeInputPanel === 'material'"
+                (click)="activeInputPanel = 'material'">Material</button>
+        <button type="button" role="tab" id="input-tab-supports" aria-controls="input-panel-supports"
+                [attr.aria-selected]="activeInputPanel === 'supports'" [class.active]="activeInputPanel === 'supports'"
+                (click)="activeInputPanel = 'supports'">Supports</button>
+        <button type="button" role="tab" id="input-tab-loads" aria-controls="input-panel-loads"
+                [attr.aria-selected]="activeInputPanel === 'loads'" [class.active]="activeInputPanel === 'loads'"
+                (click)="activeInputPanel = 'loads'">Loads</button>
+      </nav>
+
+      <div class="configuration-grid">
+        <article class="config-card" id="input-panel-material" role="tabpanel" aria-labelledby="input-tab-material"
+                 [hidden]="activeInputPanel !== 'material'">
+          <div class="config-card-heading"><span class="config-index">01</span><div><h3>Material &amp; section</h3></div></div>
+          <div class="field-block">
+            <label for="beamLength">Beam length <span>L</span></label>
+            <div class="input-with-unit"><input id="beamLength" type="number" min="0.1" max="100" step="0.1" [(ngModel)]="beam.length_m" (change)="onLengthChange()"><span>m</span></div>
+          </div>
+          <div class="field-block">
+            <label for="material">Material preset</label>
+            <select id="material" [(ngModel)]="materialPreset" (ngModelChange)="onMaterialPresetChange()">
+              <option value="200">Structural steel · 200 GPa</option>
+              <option value="69">Aluminium 6061-T6 · 69 GPa</option>
+              <option value="30">Concrete · 30 GPa</option>
+              <option value="12">Structural timber · 12 GPa</option>
+              <option value="110">Titanium · 110 GPa</option>
+              <option value="custom">Custom value</option>
+            </select>
+          </div>
+          <div class="field-block">
+            <label for="youngsModulus">Young's modulus <span>E</span></label>
+            <div class="input-with-unit"><input id="youngsModulus" type="number" min="0.001" step="1" [(ngModel)]="beam.youngs_modulus_gpa" (change)="onYoungsModulusChange()"><span>GPa</span></div>
+          </div>
+          <div class="field-block">
+            <div class="field-label-row">
+              <label for="yieldStrength">{{ strengthLimitLabel }}</label>
+              <button type="button" class="help-tip" title="Use a measured or published strength value for screening. The solver remains a linear-elastic beam model." aria-label="About the material strength limit">?</button>
+            </div>
+            <div class="input-with-unit"><input id="yieldStrength" type="number" min="0.001" step="1" [(ngModel)]="yieldStrengthMpa" (change)="onYieldStrengthChange()"><span>MPa</span></div>
+          </div>
+          <details class="advanced-inputs">
+            <summary>Advanced section properties</summary>
+            <div class="field-block section-shape-field">
+              <label for="sectionShape">Cross-section helper</label>
+              <select id="sectionShape" [(ngModel)]="sectionShape" (ngModelChange)="applySectionShape()">
+                <option value="manual">Enter I and c manually</option>
+                <option value="rectangle">Solid rectangle</option>
+                <option value="circle">Solid circle</option>
+                <option value="pipe">Hollow circular section</option>
+              </select>
+            </div>
+          @if (sectionShape === 'rectangle') {
+            <div class="field-pair">
+              <div class="field-block"><label for="sectionWidth">Width b</label><div class="input-with-unit"><input id="sectionWidth" type="number" min="0.1" step="1" [(ngModel)]="sectionWidthMm" (change)="applySectionShape()"><span>mm</span></div></div>
+              <div class="field-block"><label for="sectionHeight">Height h</label><div class="input-with-unit"><input id="sectionHeight" type="number" min="0.1" step="1" [(ngModel)]="sectionHeightMm" (change)="applySectionShape()"><span>mm</span></div></div>
+            </div>
+            <div class="field-help-tip"><button type="button" class="help-tip" title="Second moment of area I = b h cubed / 12; extreme-fibre distance c = h / 2." aria-label="Rectangle section calculation">?</button></div>
+          }
+          @if (sectionShape === 'circle') {
+            <div class="field-block"><label for="sectionDiameter">Diameter d</label><div class="input-with-unit"><input id="sectionDiameter" type="number" min="0.1" step="1" [(ngModel)]="sectionDiameterMm" (change)="applySectionShape()"><span>mm</span></div></div>
+            <div class="field-help-tip"><button type="button" class="help-tip" title="Second moment of area I = π d to the fourth / 64; extreme-fibre distance c = d / 2." aria-label="Circle section calculation">?</button></div>
+          }
+          @if (sectionShape === 'pipe') {
+            <div class="field-pair">
+              <div class="field-block"><label for="pipeOuter">Outer diameter D</label><div class="input-with-unit"><input id="pipeOuter" type="number" min="0.2" step="1" [(ngModel)]="pipeOuterDiameterMm" (change)="applySectionShape()"><span>mm</span></div></div>
+              <div class="field-block"><label for="pipeThickness">Wall thickness t</label><div class="input-with-unit"><input id="pipeThickness" type="number" min="0.1" step="1" [(ngModel)]="pipeThicknessMm" (change)="applySectionShape()"><span>mm</span></div></div>
+            </div>
+            <div class="field-help-tip"><button type="button" class="help-tip" title="Second moment of area I = π (D to the fourth − d to the fourth) / 64; extreme-fibre distance c = D / 2." aria-label="Hollow circular section calculation">?</button></div>
+          }
+            <div class="field-block">
+              <label for="inertia">Second moment <span>I</span></label>
+              <div class="input-with-unit"><input id="inertia" type="number" min="0.000000000001" step="any" [(ngModel)]="beam.inertia_cm4" (change)="analyze()"><span>cm⁴</span></div>
+            </div>
+            <div class="field-block">
+              <div class="field-label-row">
+                <label for="extremeFibre">Neutral axis → outer fibre <span>c</span></label>
+                <button type="button" class="help-tip" title="Distance from the neutral axis to the top or bottom extreme fibre." aria-label="About the extreme-fibre distance">?</button>
+              </div>
+              <div class="input-with-unit"><input id="extremeFibre" type="number" min="0.001" step="1" [(ngModel)]="beam.extreme_fibre_mm" (change)="analyze()"><span>mm</span></div>
+            </div>
+          </details>
+          <div class="rigidity-readout"><span>Flexural rigidity · EI</span><strong>{{ result ? formatValue(result.EI_kNm2, 2) : '—' }} <small>kN·m²</small></strong></div>
+        </article>
+
+        <article class="config-card" id="input-panel-supports" role="tabpanel" aria-labelledby="input-tab-supports"
+                 [hidden]="activeInputPanel !== 'supports'">
+          <div class="config-card-heading"><span class="config-index">02</span><div><h3>Support conditions</h3></div></div>
+          <div class="field-block">
+            <label for="supportType">Support arrangement</label>
+            <select id="supportType" [(ngModel)]="beam.support_type" (ngModelChange)="onSupportChange()">
+              @for (option of supportOptions; track option.value) {
+                <option [value]="option.value">{{ option.label }}</option>
+              }
+            </select>
+          </div>
+          @if (hasCustomSupportPositions) {
+            <div class="field-pair">
+              <div class="field-block">
+                <label for="supportA">Support A <span>xₐ</span></label>
+                <div class="input-with-unit"><input id="supportA" type="number" min="0" [max]="beam.length_m" step="0.1" [(ngModel)]="beam.support_a_m" (change)="analyze()"><span>m</span></div>
+              </div>
+              <div class="field-block">
+                <label for="supportB">Support B <span>xᵦ</span></label>
+                <div class="input-with-unit"><input id="supportB" type="number" min="0" [max]="beam.length_m" step="0.1" [(ngModel)]="beam.support_b_m" (change)="analyze()"><span>m</span></div>
+              </div>
+            </div>
+          } @else {
+            <div class="boundary-note"><span class="boundary-icon">⌁</span><div><strong>Boundary conditions</strong><p>{{ result?.boundary_conditions }}</p></div></div>
+          }
+          <div class="field-block interval-field">
+            <label for="intervals">Numerical intervals</label>
+            <select id="intervals" [(ngModel)]="beam.intervals" (ngModelChange)="analyze()">
+              <option [ngValue]="500">500 · 501 stations</option>
+              <option [ngValue]="1000">1,000 · 1,001 stations</option>
+              <option [ngValue]="2000">2,000 · 2,001 stations</option>
+              <option [ngValue]="5000">5,000 · 5,001 stations</option>
+            </select>
+          </div>
+        </article>
+
+        <article class="config-card load-manager-card" id="input-panel-loads" role="tabpanel" aria-labelledby="input-tab-loads"
+                 [hidden]="activeInputPanel !== 'loads'">
+          <div class="config-card-heading"><span class="config-index">03</span><div><h3>Applied loads</h3></div></div>
+          <div class="load-type-switch" role="group" aria-label="Load type">
+            <button type="button" [class.active]="newLoadType === 'point'" (click)="newLoadType = 'point'">Point</button>
+            <button type="button" [class.active]="newLoadType === 'udl'" (click)="newLoadType = 'udl'">Distributed</button>
+            <button type="button" [class.active]="newLoadType === 'moment'" (click)="newLoadType = 'moment'">Moment</button>
+          </div>
+          @if (newLoadType === 'point') {
+            <div class="field-pair">
+              <div class="field-block"><label for="pointForce">Force P</label><div class="input-with-unit"><input id="pointForce" type="number" step="1" [(ngModel)]="pointForce"><span>kN</span></div></div>
+              <div class="field-block"><label for="pointPosition">Position x</label><div class="input-with-unit"><input id="pointPosition" type="number" min="0" [max]="beam.length_m" step="0.1" [(ngModel)]="pointPosition"><span>m</span></div></div>
+            </div>
+            <div class="field-help-tip"><button type="button" class="help-tip" title="Positive force acts downward; negative force acts upward." aria-label="About the point-load sign convention">?</button></div>
+          }
+          @if (newLoadType === 'udl') {
+            <div class="field-pair">
+              <div class="field-block"><label for="udlW1">Start intensity</label><div class="input-with-unit"><input id="udlW1" type="number" step="1" [(ngModel)]="udlStartIntensity"><span>kN/m</span></div></div>
+              <div class="field-block"><label for="udlW2">End intensity</label><div class="input-with-unit"><input id="udlW2" type="number" step="1" [(ngModel)]="udlEndIntensity"><span>kN/m</span></div></div>
+              <div class="field-block"><label for="udlStart">Start x₁</label><div class="input-with-unit"><input id="udlStart" type="number" min="0" [max]="beam.length_m" step="0.1" [(ngModel)]="udlStart"><span>m</span></div></div>
+              <div class="field-block"><label for="udlEnd">End x₂</label><div class="input-with-unit"><input id="udlEnd" type="number" min="0" [max]="beam.length_m" step="0.1" [(ngModel)]="udlEnd"><span>m</span></div></div>
+            </div>
+            <div class="field-help-tip"><button type="button" class="help-tip" title="Set equal intensities for a uniform load, or different values for a linearly varying load." aria-label="About distributed loads">?</button></div>
+          }
+          @if (newLoadType === 'moment') {
+            <div class="field-pair">
+              <div class="field-block"><label for="momentValue">Couple M</label><div class="input-with-unit"><input id="momentValue" type="number" step="1" [(ngModel)]="appliedMoment"><span>kN·m</span></div></div>
+              <div class="field-block"><label for="momentPosition">Position x</label><div class="input-with-unit"><input id="momentPosition" type="number" min="0" [max]="beam.length_m" step="0.1" [(ngModel)]="momentPosition"><span>m</span></div></div>
+            </div>
+            <div class="field-help-tip"><button type="button" class="help-tip" title="Positive and negative couples follow the sign convention used in the diagrams." aria-label="About the applied-moment sign convention">?</button></div>
+          }
+          <button type="button" class="button button-primary add-load-button" (click)="addLoad()"><span class="button-icon">+</span> Add load to beam</button>
+
+          <div class="active-loads-heading"><strong>Active loads</strong><span>{{ loads.length }} {{ loads.length === 1 ? 'load' : 'loads' }}</span></div>
+          <div class="active-loads-list">
+            @for (load of loads; track load.id) {
+              <div class="load-list-item">
+                <span class="load-kind" [class.point-kind]="load.type === 'point'" [class.udl-kind]="load.type === 'udl'" [class.moment-kind]="load.type === 'moment'">{{ getLoadKind(load) }}</span>
+                <span class="load-description">{{ loadDescription(load) }}</span>
+                <button type="button" class="remove-load" (click)="removeLoad(load.id)" [attr.aria-label]="'Remove ' + getLoadKind(load).toLowerCase() + ' load'">×</button>
+              </div>
+            } @empty {
+              <div class="empty-loads">No applied loads. Add one above to analyse the beam.</div>
+            }
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section class="data-section">
+      <div class="data-heading">
+        <div><div class="eyebrow">NUMERICAL RESULTS</div><h2>Explore the calculated data</h2></div>
+        <div class="data-tabs" role="tablist" aria-label="Result views">
+          <button type="button" role="tab" [attr.aria-selected]="activeTab === 'plots'" [class.active]="activeTab === 'plots'" (click)="activeTab = 'plots'">Summary</button>
+          <button type="button" role="tab" [attr.aria-selected]="activeTab === 'table'" [class.active]="activeTab === 'table'" (click)="activeTab = 'table'">All stations</button>
+          <button type="button" role="tab" [attr.aria-selected]="activeTab === 'theory'" [class.active]="activeTab === 'theory'" (click)="activeTab = 'theory'">Model notes</button>
+        </div>
+      </div>
+
+      @if (activeTab === 'plots') {
+        <div class="results-note">
+          <span class="note-check">✓</span>
+          <span>Stress and strain are calculated and returned for <strong>every numerical station</strong>. Hover the beam to interpolate the local section response between adjacent stations.</span>
+          <button type="button" class="text-button" (click)="activeTab = 'table'">View all {{ result?.station_count | number }} points →</button>
+        </div>
+      }
+
+      @if (activeTab === 'table' && result) {
+        <div class="table-toolbar"><div><strong>{{ result.station_count | number }} evaluated stations</strong><span> · Δx = {{ result.dx_m | number:'1.4-4' }} m</span></div><button type="button" class="button button-quiet" (click)="exportCsv()">↓ Export CSV</button></div>
+        <div class="table-scroll">
+          <table class="results-table">
+            <thead><tr><th>Node</th><th>x (m)</th><th>V (kN)</th><th>M (kN·m)</th><th>v (mm)</th><th>Top σ (MPa)</th><th>Bottom σ (MPa)</th><th>Top ε (με)</th><th>Bottom ε (με)</th></tr></thead>
+            <tbody>
+              @for (point of result.points; track point.node) {
+                <tr [class.selected-row]="point.node === activeNode" (mouseenter)="activeX = point.x_m">
+                  <td>{{ point.node }}</td><td>{{ point.x_m | number:'1.3-3' }}</td>
+                  <td>{{ point.shear_kN | number:'1.3-3' }}</td><td>{{ point.moment_kNm | number:'1.3-3' }}</td>
+                  <td>{{ point.deflection_mm | number:'1.3-3' }}</td><td>{{ point.stress_top_MPa | number:'1.3-3' }}</td>
+                  <td>{{ point.stress_bottom_MPa | number:'1.3-3' }}</td><td>{{ point.strain_top_micro | number:'1.2-2' }}</td><td>{{ point.strain_bottom_micro | number:'1.2-2' }}</td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        </div>
+      }
+
+      @if (activeTab === 'theory') {
+        <div class="theory-grid">
+          <article class="theory-card"><span class="theory-number">01</span><h3>Euler–Bernoulli</h3><div class="equation">EI · d²v/dx² = M(x)</div></article>
+          <article class="theory-card"><span class="theory-number">02</span><h3>Flexural stress</h3><div class="equation">σₓ = −My / I</div></article>
+          <article class="theory-card"><span class="theory-number">03</span><h3>Elastic strain</h3><div class="equation">εₓ = σₓ / E</div></article>
+          <article class="theory-card"><span class="theory-number">04</span><h3>Model scope</h3><div class="equation">1001 stations · SI core</div></article>
+        </div>
+        @if (result) {
+          <div class="boundary-summary"><strong>Boundary conditions used:</strong> {{ result.boundary_conditions }} <span>·</span> <strong>Integration constants:</strong> C₁ = {{ result.integration_constants.C1_rad | number:'1.3-5' }} rad, C₂ = {{ result.integration_constants.C2_m | number:'1.3-5' }} m.</div>
+        }
+      }
+    </section>
+    </div>
+    } @else if (activeWorkspace === 'mohr') {
+      <section class="mohr-workspace">
+        <div class="mohr-heading">
+          <div>
+            <h1>Mohr's circle</h1>
+          </div>
+          <div class="mohr-heading-action">
+            <button class="button button-quiet" type="button" (click)="useBeamInspectorStress()" [disabled]="!result">
+              Use beam top-fibre stress
+            </button>
+          </div>
+        </div>
+
+        <div class="mohr-layout">
+          <section class="config-card mohr-input-card" aria-labelledby="mohr-input-heading">
+            <div class="config-card-heading">
+              <span class="config-index">σ</span>
+              <div class="mohr-input-title"><h2 id="mohr-input-heading">Stress components</h2><button type="button" class="help-tip" title="Positive normal stress is tension." aria-label="About the stress sign convention">?</button></div>
+            </div>
+            <div class="field-block">
+              <label for="sigmaX">Normal stress on x-face <span>σₓ</span></label>
+              <div class="input-with-unit"><input id="sigmaX" type="number" step="any" [(ngModel)]="sigmaX"><span>MPa</span></div>
+            </div>
+            <div class="field-block">
+              <label for="sigmaY">Normal stress on y-face <span>σᵧ</span></label>
+              <div class="input-with-unit"><input id="sigmaY" type="number" step="any" [(ngModel)]="sigmaY"><span>MPa</span></div>
+            </div>
+            <div class="field-block">
+              <label for="tauXY">In-plane shear stress <span>τₓᵧ</span></label>
+              <div class="input-with-unit"><input id="tauXY" type="number" step="any" [(ngModel)]="tauXY"><span>MPa</span></div>
+            </div>
+            <div class="angle-control">
+              <div class="angle-heading"><label for="planeAngle">Plane rotation, θ</label><strong>{{ planeAngleDeg | number:'1.0-1' }}°</strong><button type="button" class="help-tip" title="Rotating the physical plane by θ moves the stress point by 2θ around the circle." aria-label="About plane rotation">?</button></div>
+              <input id="planeAngle" type="range" min="-90" max="90" step="1" [(ngModel)]="planeAngleDeg">
+              <div class="angle-range"><span>−90°</span><span>0°</span><span>90°</span></div>
+            </div>
+            <details class="mohr-sign-note">
+              <summary>Sign convention</summary>
+              <span>Positive τₓᵧ is plotted upward. Point A is (σₓ, τₓᵧ); point B is (σᵧ, −τₓᵧ).</span>
+            </details>
+          </section>
+
+          <div class="mohr-visual-column">
+            @if (mohrInputsValid) {
+              <section class="mohr-chart-card" aria-label="Mohr circle visualization">
+                <div class="card-topline">
+                  <div><h2>Stress transformation</h2></div>
+                  <div class="mohr-legend">
+                    <span><i class="mohr-legend-a"></i> Initial state</span>
+                    <span><i class="mohr-legend-current"></i> Rotated plane</span>
+                  </div>
+                </div>
+                <div class="mohr-svg-wrap">
+                  <svg viewBox="0 0 720 440" class="mohr-svg" role="img"
+                       [attr.aria-label]="'Mohr circle with center ' + (mohrResults.center | number:'1.2-2') + ' MPa and radius ' + (mohrResults.radius | number:'1.2-2') + ' MPa'">
+                    <defs>
+                      <marker id="mohrArrow" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto">
+                        <path d="M 0 0 L 8 4 L 0 8 z" fill="#64748b"></path>
+                      </marker>
+                    </defs>
+                    <line x1="55" y1="220" x2="665" y2="220" class="mohr-axis"></line>
+                    <line x1="360" y1="35" x2="360" y2="405" class="mohr-axis"></line>
+                    <text x="654" y="208" class="mohr-axis-label">σ (MPa)</text>
+                    <text x="371" y="47" class="mohr-axis-label">τ (MPa)</text>
+
+                    <circle [attr.cx]="mohrX(mohrResults.center)" cy="220" [attr.r]="mohrResults.radius * mohrScale" class="mohr-circle"></circle>
+                    <line [attr.x1]="mohrX(sigmaX)" [attr.y1]="mohrY(tauXY)"
+                          [attr.x2]="mohrX(sigmaY)" [attr.y2]="mohrY(-tauXY)" class="mohr-diameter"></line>
+                    <line [attr.x1]="mohrX(mohrResults.center)" y1="220"
+                          [attr.x2]="mohrX(mohrResults.normalAtAngle)" [attr.y2]="mohrY(mohrResults.shearAtAngle)"
+                          class="mohr-radius" marker-end="url(#mohrArrow)"></line>
+
+                    <line [attr.x1]="mohrX(mohrResults.principalMinor)" y1="211"
+                          [attr.x2]="mohrX(mohrResults.principalMinor)" y2="229" class="mohr-principal-mark"></line>
+                    <line [attr.x1]="mohrX(mohrResults.principalMajor)" y1="211"
+                          [attr.x2]="mohrX(mohrResults.principalMajor)" y2="229" class="mohr-principal-mark"></line>
+                    <circle [attr.cx]="mohrX(sigmaX)" [attr.cy]="mohrY(tauXY)" r="6" class="mohr-point-a"></circle>
+                    <circle [attr.cx]="mohrX(sigmaY)" [attr.cy]="mohrY(-tauXY)" r="6" class="mohr-point-b"></circle>
+                    <circle [attr.cx]="mohrX(mohrResults.normalAtAngle)" [attr.cy]="mohrY(mohrResults.shearAtAngle)" r="7" class="mohr-point-current"></circle>
+                    <circle [attr.cx]="mohrX(mohrResults.center)" cy="220" r="4" class="mohr-center-point"></circle>
+
+                    <text [attr.x]="mohrX(sigmaX) + 10" [attr.y]="mohrY(tauXY) - 10" class="mohr-point-label">A</text>
+                    <text [attr.x]="mohrX(sigmaY) + 10" [attr.y]="mohrY(-tauXY) + 18" class="mohr-point-label">B</text>
+                    <text [attr.x]="mohrX(mohrResults.normalAtAngle) + 11" [attr.y]="mohrY(mohrResults.shearAtAngle) - 10" class="mohr-current-label">θ = {{ planeAngleDeg | number:'1.0-1' }}°</text>
+                    <text [attr.x]="mohrX(mohrResults.center)" y="246" text-anchor="middle" class="mohr-center-label">C</text>
+                    <text [attr.x]="mohrX(mohrResults.principalMinor)" y="250" text-anchor="middle" class="mohr-principal-label">σ₂</text>
+                    <text [attr.x]="mohrX(mohrResults.principalMajor)" y="250" text-anchor="middle" class="mohr-principal-label">σ₁</text>
+                  </svg>
+                </div>
+                <div class="mohr-chart-caption">
+                  <span><i class="mohr-point-a"></i> A = (σₓ, τₓᵧ)</span>
+                  <span><i class="mohr-point-b"></i> B = (σᵧ, −τₓᵧ)</span>
+                  <span><i class="mohr-point-current"></i> Transformed state</span>
+                </div>
+              </section>
+
+              <section class="mohr-results" aria-label="Calculated stress results">
+                <h2>Stress results</h2>
+                <table class="mohr-spec-table">
+                  <tbody>
+                    <tr><th>Principal σ₁</th><td>{{ mohrResults.principalMajor | number:'1.2-2' }} MPa</td></tr>
+                    <tr><th>Principal σ₂</th><td>{{ mohrResults.principalMinor | number:'1.2-2' }} MPa</td></tr>
+                    <tr><th>Max. in-plane τ</th><td>±{{ mohrResults.maxShear | number:'1.2-2' }} MPa</td></tr>
+                    <tr><th>Center / radius</th><td>{{ mohrResults.center | number:'1.2-2' }} / {{ mohrResults.radius | number:'1.2-2' }} MPa</td></tr>
+                    <tr><th>Principal angle</th><td>{{ mohrResults.principalAngle | number:'1.1-1' }}°</td></tr>
+                    <tr><th>At θ = {{ planeAngleDeg | number:'1.0-1' }}°</th><td>σₙ {{ mohrResults.normalAtAngle | number:'1.2-2' }} · τₙₜ {{ mohrResults.shearAtAngle | number:'1.2-2' }} MPa</td></tr>
+                  </tbody>
+                </table>
+              </section>
+            } @else {
+              <div class="error-banner" role="alert">Enter finite values for all stress components and the plane angle to generate the circle.</div>
+            }
+          </div>
+        </div>
+
+        <details class="mohr-formula-card">
+          <summary>Mohr-circle relationships</summary>
+          <div class="mohr-formulas">
+            <div><strong>Center</strong><span>σ<sub>avg</sub> = (σₓ + σᵧ) / 2</span></div>
+            <div><strong>Radius</strong><span>R = √[((σₓ − σᵧ)/2)² + τₓᵧ²]</span></div>
+            <div><strong>Principal angle</strong><span>θₚ = ½ atan2(2τₓᵧ, σₓ − σᵧ)</span></div>
+          </div>
+          <p>Principal stresses and maximum shear are in-plane values for this 2D stress state; out-of-plane stress is not included.</p>
+        </details>
+      </section>
+    } @else {
+      <app-digital-twin />
+    }
+
+    <footer class="page-footer">
+      <span>Bending Bad · Structural mechanics learning tool</span>
+      <span>{{ activeWorkspace === 'beam' ? 'Euler–Bernoulli beam model · Numerical integration' : activeWorkspace === 'mohr' ? 'Plane stress transformation · Mohr circle' : 'Live strain monitor' }}</span>
+    </footer>
+  </main>
+</div>
